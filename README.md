@@ -77,6 +77,40 @@ npm --prefix tests/plugin-telegram-compat run typecheck   # tsc --noEmit, clean
 npm --prefix tests/plugin-telegram-compat run test         # 11 passed
 ```
 
+## Compatibility CI (running)
+
+The same job runs in CI in this repository, at
+`.github/workflows/plugin-telegram-compat.yml`. It is identical to the host
+copy in `host/.github/workflows/plugin-telegram-compat.yml` except for one
+line: `FIXTURE_DIR` points at `host/tests/plugin-telegram-compat` here and at
+`tests/plugin-telegram-compat` in the host repository.
+
+| Run | Result |
+| --- | --- |
+| [Plugin compatibility (Telegram) #1](https://github.com/sdkwala/paperclip-telegram-compat/actions/runs/39759996849) | green — `npm ci` installed 56 packages, `tsc --noEmit` clean, 11 tests passed |
+
+The job also reports, in the run summary:
+
+- the upstream `main` head and whether upstream already rejects an empty
+  allowlist (`upstream enforces: no`, head `12be2bb`, 2026-09-07);
+- whether the delivered patch still applies to upstream `main`
+  (`delivered patch still applies: yes`, 2026-10-22);
+- the pinned release against the latest published release
+  (`pinned: 0.8.1`, `latest published: 0.8.1`).
+
+### Installing the job in the host repository
+
+Copy two paths into the host repository (`paperclipai/paperclip`):
+
+```
+.github/workflows/plugin-telegram-compat.yml   <- from host/.github/workflows/plugin-telegram-compat.yml
+tests/plugin-telegram-compat/                  <- from host/tests/plugin-telegram-compat/
+```
+
+The managed GitHub identity used for this delivery has pull-only access to
+`paperclipai/paperclip` (verified: `permissions.push` is `false`), so the copy
+needs someone with push access, or the grant to push those two paths directly.
+
 ## Pinned release availability
 
 | Version                | Published | Provenance | Notes                                                        |
@@ -84,7 +118,9 @@ npm --prefix tests/plugin-telegram-compat run test         # 11 passed
 | `paperclip-plugin-telegram@0.8.1` | yes | SLSA v1, GitHub Actions | built from `12be2bb2fc7693de9f2480f05cb45feaa19725c3` |
 | `paperclip-plugin-telegram@0.8.2` | no  | n/a        | built and verified from the patched tree; the upstream maintainer publishes it |
 
-`0.8.2` is not on the registry. The patched tree builds (`tsc` clean), packs
+`0.8.2` is not on the registry. As of 2026-10-22 the upstream `main` branch is
+still at `12be2bb` (2026-09-07) and does not yet reject an empty allowlist, and
+the delivered patch still applies to it cleanly. The patched tree builds (`tsc` clean), packs
 (`npm pack`), installs against `@paperclipai/plugin-sdk@2026.1012.0`, typechecks
 against that SDK, and enforces the allowlist with the expected error. The
 upstream release workflow (`.github/workflows/publish.yml`) publishes the next
