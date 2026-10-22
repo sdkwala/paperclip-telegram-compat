@@ -76,9 +76,16 @@ Verified locally in the host workspace:
 
 ```
 npm --prefix tests/plugin-telegram-compat ci --include=dev --no-audit --no-fund
-npm --prefix tests/plugin-telegram-compat run typecheck   # tsc --noEmit, clean
-npm --prefix tests/plugin-telegram-compat run test         # 11 passed
+npm --prefix tests/plugin-telegram-compat run typecheck        # tsc --noEmit, clean
+npm --prefix tests/plugin-telegram-compat run test              # 11 passed (plugin against SDK)
+npm --prefix tests/plugin-telegram-compat run test:host-policy  # the host allowlist guard
 ```
+
+The two suites are separate on purpose. `test` proves the pinned plugin still
+works against the pinned SDK, and stays green while the upstream state moves.
+`test:host-policy` is the guard, and it fails while the published host
+repository has no allowlist policy, or while the policy is looser than the
+plugin runtime.
 
 ## Host allowlist guard
 

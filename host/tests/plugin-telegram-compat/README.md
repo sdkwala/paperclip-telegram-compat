@@ -31,8 +31,14 @@ are the ones under test.
 ```sh
 npm --prefix tests/plugin-telegram-compat ci --include=dev
 npm --prefix tests/plugin-telegram-compat run typecheck
-npm --prefix tests/plugin-telegram-compat run test
+npm --prefix tests/plugin-telegram-compat run test              # plugin against SDK
+npm --prefix tests/plugin-telegram-compat run test:host-policy  # the host allowlist guard
 ```
+
+`test` and `test:host-policy` are separate suites on purpose: the first proves
+the pinned plugin still works against the pinned SDK, the second is the guard
+on the host's allowlist policy and fails while that policy is missing or
+looser than the plugin runtime. `test:all` runs both.
 
 Or from the repository root:
 

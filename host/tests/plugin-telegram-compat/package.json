@@ -9,8 +9,9 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "test:host-policy": "vitest run host-policy.test.ts"
+    "test": "vitest run compat.test.ts",
+    "test:host-policy": "vitest run host-policy.test.ts",
+    "test:all": "vitest run"
   },
   "dependencies": {
     "@paperclipai/plugin-sdk": "2026.1012.0",
