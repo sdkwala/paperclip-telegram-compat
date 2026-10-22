@@ -1,0 +1,68 @@
+name: Plugin compatibility (Telegram)
+
+# Installs the pinned paperclip-plugin-telegram release against a pinned
+# Paperclip SDK and proves the two still work together. The pin is explicit:
+# this job never resolves "latest", so an upstream release cannot change what
+# the host ships without a reviewed commit here.
+#
+# Install this file at .github/workflows/plugin-telegram-compat.yml in the host
+# repository. See tests/plugin-telegram-compat/README.md.
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/plugin-telegram-compat.yml"
+      - "tests/plugin-telegram-compat/**"
+  push:
+    branches: [master]
+    paths:
+      - ".github/workflows/plugin-telegram-compat.yml"
+      - "tests/plugin-telegram-compat/**"
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-telegram-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  telegram-compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+      - name: Install the pinned plugin and Paperclip SDK
+        working-directory: tests/plugin-telegram-compat
+        run: npm ci --include=dev --no-audit --no-fund
+      - name: Typecheck the pinned plugin against the pinned SDK
+        working-directory: tests/plugin-telegram-compat
+        run: npm run typecheck
+      - name: Run the compatibility tests
+        working-directory: tests/plugin-telegram-compat
+        run: npm test
+      - name: Report the pinned release against the published release
+        run: |
+          pinned=$(node -p "require('./tests/plugin-telegram-compat/node_modules/paperclip-plugin-telegram/package.json').version")
+          latest=$(npm view paperclip-plugin-telegram version)
+          {
+            echo "### Telegram plugin release status"
+            echo ""
+            echo "- pinned: \`$pinned\`"
+            echo "- latest published: \`$latest\`"
+            echo ""
+            if [ "$latest" != "$pinned" ]; then
+              echo "A newer upstream release is published. The pin deliberately does not track \`latest\`:"
+              echo "bump \`tests/plugin-telegram-compat/package.json\` and \`tests/plugin-telegram-compat/src/pinned.ts\`"
+              echo "in one commit, and set \`PINNED_PLUGIN_ENFORCES_ALLOWLIST\` to \`true\` when the release ships"
+              echo "the allowlist enforcement fix."
+            else
+              echo "The pinned release is the latest published release."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

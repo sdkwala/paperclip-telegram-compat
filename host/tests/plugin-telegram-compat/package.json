@@ -1,0 +1,26 @@
+{
+  "name": "paperclip-plugin-telegram-compat",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Host compatibility checks for the pinned paperclip-plugin-telegram release against a pinned Paperclip SDK.",
+  "engines": {
+    "node": ">=24.11.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@paperclipai/plugin-sdk": "2026.1012.0",
+    "@paperclipai/shared": "2026.1012.0",
+    "paperclip-plugin-telegram": "0.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
+  }
+}

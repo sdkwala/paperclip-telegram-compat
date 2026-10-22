@@ -1,0 +1,236 @@
+From ea5a48fef246b66e4adc8e4d2001384fe25bd3eb Mon Sep 17 00:00:00 2001
+From: sdkwala <218804976+sdkwala@users.noreply.github.com>
+Date: Thu, 22 Oct 2026 09:40:42 +0000
+Subject: [PATCH] fix(security): require an allowlist when commands or inbound
+ are enabled
+
+validateTelegramAllowlists only checked that the allowlists were arrays, so
+an empty allowlist passed validation while isTelegramUpdateAllowed then
+accepted every sender. A config with enableCommands or enableInbound enabled
+and no allowlist therefore exposes the bot's commands, inbound replies, media
+intake, and inline buttons to anyone who can reach it.
+
+The validator now rejects an empty allowlist whenever enableCommands or
+enableInbound is enabled. The flags are read with the same truthiness rule
+the worker runtime uses (if (config.enableCommands)), so a config the worker
+would honour cannot pass validation.
+
+The flags are optional on TelegramAllowlistConfig and absent flags keep the
+previous behaviour, so existing callers that only pass allowlists are
+unaffected.
+---
+ README.md                      |   6 +-
+ src/allowlist.ts               |  30 ++++++++-
+ tests/worker-allowlist.test.ts | 114 ++++++++++++++++++++++++++++++++-
+ 3 files changed, 143 insertions(+), 7 deletions(-)
+
+diff --git a/README.md b/README.md
+index 6bc4c25..3042812 100644
+--- a/README.md
++++ b/README.md
+@@ -194,8 +194,8 @@ Before filing a bug, confirm which Paperclip host this plugin is actually talkin
+ | `notifyOnAgentError` | No | Send agent failure notifications (default: true) |
+ | `notifyOnAgentRunStarted` | No | Send agent run-start lifecycle notifications (default: false) |
+ | `notifyOnAgentRunFinished` | No | Send agent run-finish lifecycle notifications (default: false) |
+-| `allowedTelegramUserIds` | No | Optional allowlist of Telegram user IDs allowed to use commands, inbound replies, media intake, and inline buttons. Empty means any user is allowed |
+-| `allowedTelegramChatIds` | No | Optional allowlist of Telegram chat IDs where commands, inbound replies, media intake, and inline buttons are accepted. Empty means any chat is allowed |
++| `allowedTelegramUserIds` | No | Optional allowlist of Telegram user IDs allowed to use commands, inbound replies, media intake, and inline buttons. Required (non-empty) when `enableCommands` or `enableInbound` is enabled |
++| `allowedTelegramChatIds` | No | Optional allowlist of Telegram chat IDs where commands, inbound replies, media intake, and inline buttons are accepted. Required (non-empty) when `enableCommands` or `enableInbound` is enabled |
+ | `topicRouting` | No | Map forum topics to projects (default: false) |
+ | `digestMode` | No | Digest frequency: off, daily, bidaily, tridaily (default: off) |
+ | `dailyDigestTime` | No | UTC time for digest, HH:MM (default: 09:00) |
+@@ -227,7 +227,7 @@ The allowlists apply to:
+ - media intake
+ - inline button callbacks
+ 
+-Leave an allowlist empty only if that dimension should be unrestricted. After changing allowlists, save the plugin settings and restart the plugin if the new values are not picked up immediately.
++At least one of the two allowlists must contain an entry when `enableCommands` or `enableInbound` is enabled. An empty allowlist leaves that dimension unrestricted, so with both empty the bot accepts commands and replies from anyone who can reach it; configuration validation rejects that combination. Leave an allowlist empty only if that dimension should be unrestricted and the other one is configured. After changing allowlists, save the plugin settings and restart the plugin if the new values are not picked up immediately.
+ 
+ ### Board access for approval actions
+ 
+diff --git a/src/allowlist.ts b/src/allowlist.ts
+index 4945c52..ecfe187 100644
+--- a/src/allowlist.ts
++++ b/src/allowlist.ts
+@@ -1,6 +1,8 @@
+ export type TelegramAllowlistConfig = {
+   allowedTelegramUserIds?: unknown;
+   allowedTelegramChatIds?: unknown;
++  enableCommands?: unknown;
++  enableInbound?: unknown;
+ };
+ 
+ export type TelegramAllowlistUpdate = {
+@@ -26,12 +28,38 @@ function normalizeAllowlist(values: unknown): Set<string> {
+   );
+ }
+ 
++export const TELEGRAM_ALLOWLIST_REQUIRED_ERROR =
++  "enableCommands/enableInbound requires a non-empty allowedTelegramUserIds or allowedTelegramChatIds.";
++
++/**
++ * Mirrors the runtime gate in worker.ts (`if (config.enableCommands)`), which
++ * treats any truthy value as enabled. Matching it here keeps the validator
++ * from waving through a config the worker would otherwise honour.
++ */
++function isFeatureEnabled(value: unknown): boolean {
++  return Boolean(value);
++}
++
+ export function validateTelegramAllowlists(config: TelegramAllowlistConfig): string[] {
+   const errors: string[] = [];
+   for (const key of ["allowedTelegramUserIds", "allowedTelegramChatIds"] as const) {
+     const value = config[key];
+     if (value === undefined || Array.isArray(value)) continue;
+-    errors.push(`${key} must be an array of Telegram ID strings. Leave it empty to allow any ${key === "allowedTelegramUserIds" ? "user" : "chat"}.`);
++    errors.push(`${key} must be an array of Telegram ID strings. Leave it empty only when enableCommands and enableInbound are both disabled.`);
++  }
++  if (errors.length > 0) return errors;
++
++  // An empty allowlist makes isTelegramUpdateAllowed accept every sender, so
++  // enabling commands or inbound without one exposes the bot to anyone who
++  // can reach it. Require at least one entry whenever either feature runs.
++  if (!isFeatureEnabled(config.enableCommands) && !isFeatureEnabled(config.enableInbound)) {
++    return errors;
++  }
++
++  const allowedUserIds = normalizeAllowlist(config.allowedTelegramUserIds);
++  const allowedChatIds = normalizeAllowlist(config.allowedTelegramChatIds);
++  if (allowedUserIds.size === 0 && allowedChatIds.size === 0) {
++    errors.push(TELEGRAM_ALLOWLIST_REQUIRED_ERROR);
+   }
+   return errors;
+ }
+diff --git a/tests/worker-allowlist.test.ts b/tests/worker-allowlist.test.ts
+index b5ff22d..15aae9a 100644
+--- a/tests/worker-allowlist.test.ts
++++ b/tests/worker-allowlist.test.ts
+@@ -1,5 +1,9 @@
+ import { describe, expect, it } from "vitest";
+-import { isTelegramUpdateAllowed, validateTelegramAllowlists } from "../src/allowlist.js";
++import {
++  isTelegramUpdateAllowed,
++  validateTelegramAllowlists,
++  TELEGRAM_ALLOWLIST_REQUIRED_ERROR,
++} from "../src/allowlist.js";
+ 
+ const baseConfig = {
+   allowedTelegramUserIds: [],
+@@ -132,8 +136,112 @@ describe("validateTelegramAllowlists", () => {
+       allowedTelegramUserIds: "123",
+       allowedTelegramChatIds: "-1001",
+     })).toEqual([
+-      "allowedTelegramUserIds must be an array of Telegram ID strings. Leave it empty to allow any user.",
+-      "allowedTelegramChatIds must be an array of Telegram ID strings. Leave it empty to allow any chat.",
++      "allowedTelegramUserIds must be an array of Telegram ID strings. Leave it empty only when enableCommands and enableInbound are both disabled.",
++      "allowedTelegramChatIds must be an array of Telegram ID strings. Leave it empty only when enableCommands and enableInbound are both disabled.",
+     ]);
+   });
++
++  it("rejects an empty allowlist when commands are enabled", () => {
++    expect(validateTelegramAllowlists({ enableCommands: true })).toEqual([
++      TELEGRAM_ALLOWLIST_REQUIRED_ERROR,
++    ]);
++    expect(validateTelegramAllowlists({
++      enableCommands: true,
++      allowedTelegramUserIds: [],
++      allowedTelegramChatIds: [],
++    })).toEqual([TELEGRAM_ALLOWLIST_REQUIRED_ERROR]);
++  });
++
++  it("rejects an empty allowlist when inbound is enabled", () => {
++    expect(validateTelegramAllowlists({ enableInbound: true })).toEqual([
++      TELEGRAM_ALLOWLIST_REQUIRED_ERROR,
++    ]);
++  });
++
++  it("rejects an allowlist that only contains blank entries", () => {
++    expect(validateTelegramAllowlists({
++      enableCommands: true,
++      allowedTelegramUserIds: ["  "],
++      allowedTelegramChatIds: [""],
++    })).toEqual([TELEGRAM_ALLOWLIST_REQUIRED_ERROR]);
++  });
++
++  it("accepts an empty allowlist when commands and inbound are both disabled", () => {
++    expect(validateTelegramAllowlists({ enableCommands: false, enableInbound: false })).toEqual([]);
++    expect(validateTelegramAllowlists({
++      enableCommands: false,
++      enableInbound: false,
++      allowedTelegramUserIds: [],
++      allowedTelegramChatIds: [],
++    })).toEqual([]);
++  });
++
++  it("accepts a non-empty allowlist when commands or inbound are enabled", () => {
++    expect(validateTelegramAllowlists({
++      enableCommands: true,
++      allowedTelegramUserIds: ["123"],
++    })).toEqual([]);
++    expect(validateTelegramAllowlists({
++      enableInbound: true,
++      allowedTelegramChatIds: ["-1001"],
++    })).toEqual([]);
++  });
++
++  it("keeps accepting configs that do not set the feature flags", () => {
++    expect(validateTelegramAllowlists({})).toEqual([]);
++    expect(validateTelegramAllowlists({ allowedTelegramUserIds: ["123"] })).toEqual([]);
++  });
++
++  it("treats feature flags the way the worker runtime reads them", () => {
++    expect(validateTelegramAllowlists({ enableCommands: "true" })).toEqual([
++      TELEGRAM_ALLOWLIST_REQUIRED_ERROR,
++    ]);
++    expect(validateTelegramAllowlists({ enableInbound: 1 })).toEqual([
++      TELEGRAM_ALLOWLIST_REQUIRED_ERROR,
++    ]);
++    expect(validateTelegramAllowlists({ enableCommands: 0 })).toEqual([]);
++    expect(validateTelegramAllowlists({ enableInbound: "" })).toEqual([]);
++  });
++});
++
++describe("plugin.onValidateConfig", () => {
++  const secretRef = "12f7ed4a-1234-4d0c-9abc-bd58d44d15e1";
++
++  async function validate(config: Record<string, unknown>) {
++    const { plugin } = await import("../src/worker.js");
++    const onValidateConfig = plugin.definition.onValidateConfig;
++    if (!onValidateConfig) throw new Error("plugin.onValidateConfig is not implemented");
++    return onValidateConfig(config);
++  }
++
++  it("rejects a config that enables commands or inbound without an allowlist", async () => {
++    const result = await validate({
++      telegramBotTokenRef: secretRef,
++      enableCommands: true,
++      enableInbound: true,
++    });
++    expect(result.ok).toBe(false);
++    expect(result.errors).toContain(TELEGRAM_ALLOWLIST_REQUIRED_ERROR);
++  });
++
++  it("accepts a config that enables commands with an allowlist", async () => {
++    const result = await validate({
++      telegramBotTokenRef: secretRef,
++      enableCommands: true,
++      enableInbound: true,
++      allowedTelegramUserIds: ["123"],
++    });
++    expect(result.ok).toBe(true);
++    expect(result.errors).toBeUndefined();
++  });
++
++  it("accepts a notify-only config with an empty allowlist", async () => {
++    const result = await validate({
++      telegramBotTokenRef: secretRef,
++      enableCommands: false,
++      enableInbound: false,
++    });
++    expect(result.ok).toBe(true);
++    expect(result.errors).toBeUndefined();
++  });
+ });
+-- 
+2.47.3
+
