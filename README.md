@@ -111,6 +111,22 @@ The managed GitHub identity used for this delivery has pull-only access to
 `paperclipai/paperclip` (verified: `permissions.push` is `false`), so the copy
 needs someone with push access, or the grant to push those two paths directly.
 
+`host/install-compat-ci.sh` does the copy for whoever has that access. It
+creates a branch, commits both paths through the contents API and opens a
+pull request; it never pushes to the base branch and never writes a credential
+into a URL.
+
+```sh
+gh auth login            # or export GH_TOKEN=<token with write access>
+./host/install-compat-ci.sh <owner/repo>
+```
+
+The script was verified end to end against a scratch repository: it created the
+branch, wrote all eight files, opened the pull request, and the installed
+workflow ran green from that pull request (run `39761042002` — `npm ci` 56
+packages, `tsc --noEmit` clean, 11 tests passed). The scratch repository was
+closed and deleted afterwards.
+
 ## Pinned release availability
 
 | Version                | Published | Provenance | Notes                                                        |
