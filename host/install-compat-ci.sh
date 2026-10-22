@@ -104,7 +104,7 @@ printf 'files to install  :\n'
 printf '  %s\n' ".github/workflows/plugin-telegram-compat.yml"
 (
   cd "$host_root/tests/plugin-telegram-compat"
-  find . -type f -not -path "./node_modules/*" | sed 's|^\./|  tests/plugin-telegram-compat/|' | sort
+  find . -type f -not -path "./node_modules/*" -not -path "./.tmp/*" | sed 's|^\./|  tests/plugin-telegram-compat/|' | sort
 )
 
 if [ "$dry_run" -eq 1 ]; then
@@ -150,7 +150,7 @@ put_file ".github/workflows/plugin-telegram-compat.yml" "$host_root/.github/work
 
 (
   cd "$host_root/tests/plugin-telegram-compat"
-  find . -type f -not -path "./node_modules/*" -print0 | sort -z
+  find . -type f -not -path "./node_modules/*" -not -path "./.tmp/*" -print0 | sort -z
 ) | while IFS= read -r -d '' file; do
   relative="${file#./}"
   put_file "tests/plugin-telegram-compat/$relative" "$host_root/tests/plugin-telegram-compat/$relative"
@@ -169,6 +169,13 @@ The job installs the pinned plugin against the pinned Paperclip SDK, typechecks 
 plugin's published types against that SDK, runs the compatibility tests, and reports
 the upstream contribution state and the pinned-versus-published release status in the
 job summary. The pin is a literal version and never resolves `latest`.
+
+A second job, `host-allowlist-guard`, loads this repository's own
+`server/src/services/plugin-config-policy.ts` and executes it. The pinned plugin
+release does not reject an empty Telegram allowlist, so that policy is the only layer
+that refuses an unsafe configuration; the guard fails the build when the policy is
+missing or is looser than the plugin runtime, which enables commands for any truthy
+flag value.
 
 The same job runs green in `sdkwala/paperclip-telegram-compat`
 (`.github/workflows/plugin-telegram-compat.yml`); this copy differs only in the

@@ -115,3 +115,57 @@ jobs:
               echo "The pinned release is the latest published release."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  host-allowlist-guard:
+    name: Host allowlist guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+      - name: Install the compatibility fixture
+        run: |
+          cd "$FIXTURE_DIR"
+          npm ci --include=dev --no-audit --no-fund
+      - name: Verify the host refuses an unsafe Telegram allowlist
+        # This step is the guard, not a report. The pinned plugin release does
+        # not reject an empty allowlist, so the host policy is the only layer
+        # that refuses an unsafe Telegram configuration. The job fails when
+        # the policy is missing, and when the policy is looser than the plugin
+        # runtime, which enables commands for any truthy flag value.
+        run: |
+          cd "$FIXTURE_DIR"
+          npm run test:host-policy
+      - name: Report the host allowlist guard state
+        if: always()
+        run: |
+          set -u
+          path="server/src/services/plugin-config-policy.ts"
+          if [ -d server ]; then
+            scope="this repository"
+            if [ -f "$path" ]; then state="present"; else state="missing"; fi
+          else
+            scope="published host paperclipai/paperclip@master"
+            if curl -fsS -o /dev/null "https://raw.githubusercontent.com/paperclipai/paperclip/master/$path"; then
+              state="present"
+            else
+              state="missing"
+            fi
+          fi
+          {
+            echo "### Host allowlist guard"
+            echo ""
+            echo "- scope: \`$scope\`"
+            echo "- host allowlist policy: \`$state\`"
+            echo "- pinned plugin release: \`0.8.1\` (does not reject an empty allowlist)"
+            echo ""
+            if [ "$state" = "missing" ]; then
+              echo "The host policy is the only layer that refuses an unsafe Telegram configuration"
+              echo "while the pinned plugin release does not. Land it in the host repository."
+            else
+              echo "The host policy is present. The job above executes it against every value the"
+              echo "plugin runtime treats as enabled."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

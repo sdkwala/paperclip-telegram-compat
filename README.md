@@ -69,6 +69,9 @@ layer that refuses an empty allowlist. The test fails if the installed
 behaviour and that flag disagree, which makes moving the pin to the release
 that ships the fix a deliberate, reviewed change.
 
+The job also carries a second job, `host-allowlist-guard`, which loads the
+host policy and executes it. See [Host allowlist guard](#host-allowlist-guard).
+
 Verified locally in the host workspace:
 
 ```
@@ -76,6 +79,71 @@ npm --prefix tests/plugin-telegram-compat ci --include=dev --no-audit --no-fund
 npm --prefix tests/plugin-telegram-compat run typecheck   # tsc --noEmit, clean
 npm --prefix tests/plugin-telegram-compat run test         # 11 passed
 ```
+
+## Host allowlist guard
+
+The pinned plugin release does not reject an empty Telegram allowlist, so the
+host policy in `server/src/services/plugin-config-policy.ts` is the only layer
+that refuses an unsafe Telegram configuration. The compatibility job therefore
+does not only test the plugin: a second job, `host-allowlist-guard`, loads
+that policy and executes it.
+
+The job resolves the policy from the context it runs in:
+
+- inside the host repository it loads `server/src/services/plugin-config-policy.ts`
+  from the working tree, so the build fails if the host stops shipping the
+  guard;
+- outside the host repository it loads the file from the published host
+  repository (`paperclipai/paperclip@master`), so the build fails if the guard
+  was never landed.
+
+The guard asserts the property the plugin runtime actually has. The pinned
+runtime gates on truthiness (`if (config.enableCommands)` in `dist/worker.js`),
+so `true`, `"true"`, `"false"`, `1`, `[]` and `{}` all turn commands on, and
+`isTelegramUpdateAllowed` returns `true` when the allowlist is empty. The host
+policy has to require an allowlist for exactly those values.
+
+## Finding: the host policy is looser than the plugin runtime
+
+The host policy decides whether a feature flag is enabled with
+`value === true` (`server/src/services/plugin-config-policy.ts`), while the
+plugin runtime decides with truthiness. A configuration such as
+
+```json
+{ "enableCommands": "true" }
+```
+
+therefore passes the host guard — the flag is not `true` — while the runtime
+enables commands, and `paperclip-plugin-telegram@0.8.1` accepts updates from
+any user when the allowlist is empty. The plugin's own `instanceConfigSchema`
+does not close the gap: it declares only the secret-ref fields and allows
+additional properties, so the host's schema validation accepts the string.
+
+`host-policy.test.ts` fails on that configuration, and the guard job fails with
+it. The fix is one line in the host policy: read the flags with the runtime's
+rule (`Boolean(value)`), which is also the rule the upstream fix uses.
+
+Verified against the host workspace copy of the policy on 2026-10-22:
+
+```
+$ npm --prefix tests/plugin-telegram-compat run test:host-policy
+x rejects an empty allowlist for every value the plugin runtime treats as enabled
+AssertionError: the host policy accepted an empty allowlist with enableCommands
+set to the string "true", but the plugin runtime enables commands for that value
+```
+
+The same test passes when the policy reads the flags with `Boolean(value)`.
+
+## Host delivery state
+
+The host policy is the layer the M1 guarantee rests on while the pin is
+`0.8.1`, and it is not in the published host repository: `master` of
+`paperclipai/paperclip` has no `server/src/services/plugin-config-policy.ts`,
+no `server/src/__tests__/plugin-config-policy.test.ts` and no
+`docs/plugin-telegram.md` (checked 2026-10-22). The policy exists in the host
+workspace only, as an uncommitted edit, and the built server in that workspace
+does not contain it either. A host built from the published repository
+therefore has no allowlist guard at all, which is what the guard job reports.
 
 ## Compatibility CI (running)
 
@@ -126,6 +194,12 @@ branch, wrote all eight files, opened the pull request, and the installed
 workflow ran green from that pull request (run `39761042002` — `npm ci` 56
 packages, `tsc --noEmit` clean, 11 tests passed). The scratch repository was
 closed and deleted afterwards.
+
+The guard job is part of the installed workflow, so the copy also fails while
+the host repository has no allowlist policy, and while the policy is looser
+than the plugin runtime. Both failures are the point: the compatibility job
+refuses to be green on a host that would accept an unsafe Telegram
+configuration.
 
 ## Pinned release availability
 

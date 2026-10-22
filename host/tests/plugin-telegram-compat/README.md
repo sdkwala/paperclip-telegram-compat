@@ -49,6 +49,11 @@ that re-verifies the pin, and on manual dispatch. The scheduled run also
 reports the latest published upstream release in the job summary; it does not
 fail, because the pin is intentionally not tracking `latest`.
 
+The workflow has a second job, `host-allowlist-guard`, which runs
+`test:host-policy`. That job fails when the host policy is missing or is
+looser than the plugin runtime, because the pinned plugin release does not
+reject an empty allowlist and the host policy is the only layer that does.
+
 ## Moving the pin
 
 1. Update the versions in `package.json` and `src/pinned.ts`.
@@ -74,3 +79,32 @@ has its own unit tests.
 The upstream fix is tracked in
 `mvanhorn/paperclip-plugin-telegram` branch
 `fix/require-allowlist-when-commands-or-inbound-enabled`.
+
+## The host allowlist guard
+
+`host-policy.test.ts` loads that host policy and executes it, so the guarantee
+the host relies on is checked by this job instead of being assumed. Run it
+with:
+
+```sh
+npm --prefix tests/plugin-telegram-compat run test:host-policy
+```
+
+The policy is resolved from the context the job runs in:
+
+- inside the host repository, from `server/src/services/plugin-config-policy.ts`
+  in the working tree;
+- outside the host repository, from the published host repository
+  (`paperclipai/paperclip@master`), so the standalone compatibility repository
+  is a drift detector for the published host.
+
+`HOST_POLICY_FILE` overrides both, for a policy file at a known path.
+
+The assertions match the plugin runtime rather than a guess about it. The
+pinned runtime enables commands for any truthy `enableCommands` value —
+`true`, `"true"`, `"false"`, `1`, `[]`, `{}` — and `isTelegramUpdateAllowed`
+returns `true` when the allowlist is empty, so the host policy has to require
+an allowlist for exactly those values. A policy that only treats `true` as
+enabled lets `{"enableCommands": "true"}` through, which the plugin's
+`instanceConfigSchema` does not catch because it allows additional
+properties.
