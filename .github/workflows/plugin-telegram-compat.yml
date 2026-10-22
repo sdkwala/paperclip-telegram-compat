@@ -1,0 +1,117 @@
+name: Plugin compatibility (Telegram)
+
+# Installs the pinned paperclip-plugin-telegram release against a pinned
+# Paperclip SDK and proves the two still work together. The pin is explicit:
+# this job never resolves "latest", so an upstream release cannot change what
+# the host ships without a reviewed commit here.
+#
+# This repository runs the job against the delivered copy of the fixture
+# (host/tests/plugin-telegram-compat). The file that is installed in the host
+# repository is the same job with FIXTURE_DIR set to
+# "tests/plugin-telegram-compat"; the two copies differ only in that one
+# line, so a green run here is evidence that the host copy is runnable.
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-telegram-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FIXTURE_DIR: host/tests/plugin-telegram-compat
+
+jobs:
+  telegram-compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+      - name: Install the pinned plugin and Paperclip SDK
+        run: |
+          cd "$FIXTURE_DIR"
+          npm ci --include=dev --no-audit --no-fund
+      - name: Typecheck the pinned plugin against the pinned SDK
+        run: |
+          cd "$FIXTURE_DIR"
+          npm run typecheck
+      - name: Run the compatibility tests
+        run: |
+          cd "$FIXTURE_DIR"
+          npm test
+      - name: Report the upstream contribution state
+        # Informational only. This job must not fail because the upstream
+        # repository moved; the drift is reported so the pin and the
+        # contribution can be reviewed on a schedule.
+        continue-on-error: true
+        run: |
+          set -u
+          upstream_dir="$(mktemp -d)"
+          git clone --quiet --depth 1 https://github.com/mvanhorn/paperclip-plugin-telegram.git "$upstream_dir"
+          upstream_head="$(git -C "$upstream_dir" rev-parse HEAD)"
+          upstream_date="$(git -C "$upstream_dir" log -1 --format=%cI)"
+          if grep -rq "requires a non-empty allowedTelegramUserIds" "$upstream_dir/src"; then
+            upstream_enforces="yes"
+          else
+            upstream_enforces="no"
+          fi
+          patch_file="upstream/0001-fix-require-allowlist-when-commands-or-inbound-enabled.patch"
+          if [ -f "$patch_file" ]; then
+            if git -C "$upstream_dir" apply --check "$GITHUB_WORKSPACE/$patch_file" >/dev/null 2>&1; then
+              patch_applies="yes"
+            else
+              patch_applies="no"
+            fi
+          else
+            patch_applies="not-applicable"
+          fi
+          {
+            echo "### Upstream contribution state"
+            echo ""
+            echo "- upstream main: \`$upstream_head\` ($upstream_date)"
+            echo "- upstream enforces an empty-allowlist rejection: \`$upstream_enforces\`"
+            echo "- delivered patch still applies to upstream main: \`$patch_applies\`"
+            echo ""
+            if [ "$upstream_enforces" = "no" ] && [ "$patch_applies" = "yes" ]; then
+              echo "The upstream fix is not merged yet and the delivered patch still applies cleanly."
+              echo "Opening the pull request is the remaining step; it needs write access to"
+              echo "\`mvanhorn/paperclip-plugin-telegram\`."
+            elif [ "$upstream_enforces" = "yes" ]; then
+              echo "Upstream now rejects an empty allowlist. Bump the pin to the release that"
+              echo "ships the fix and set \`PINNED_PLUGIN_ENFORCES_ALLOWLIST\` to \`true\` in the same commit."
+            else
+              echo "The delivered patch no longer applies to upstream main. Rebase it before"
+              echo "opening the pull request."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Report the pinned release against the published release
+        run: |
+          set -u
+          pinned=$(node -p "require('./' + process.env.FIXTURE_DIR + '/node_modules/paperclip-plugin-telegram/package.json').version")
+          latest=$(npm view paperclip-plugin-telegram version)
+          {
+            echo "### Telegram plugin release status"
+            echo ""
+            echo "- pinned: \`$pinned\`"
+            echo "- latest published: \`$latest\`"
+            echo ""
+            if [ "$latest" != "$pinned" ]; then
+              echo "A newer upstream release is published. The pin deliberately does not track \`latest\`:"
+              echo "bump \`$FIXTURE_DIR/package.json\` and \`$FIXTURE_DIR/src/pinned.ts\`"
+              echo "in one commit, and set \`PINNED_PLUGIN_ENFORCES_ALLOWLIST\` to \`true\` when the release ships"
+              echo "the allowlist enforcement fix."
+            else
+              echo "The pinned release is the latest published release."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
